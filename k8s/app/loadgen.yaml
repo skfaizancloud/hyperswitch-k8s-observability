@@ -1,0 +1,61 @@
+# Optional: a headless Chrome that keeps opening the checkout page, so RUM
+# sessions + browser->backend traces exist even if you can't reach the
+# NodePort from your own browser. Heavy image (~2 GB) - enable only if needed.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rum-loadgen-script
+  namespace: app
+data:
+  visit.js: |
+    const { chromium } = require('playwright');
+    const url = process.env.TARGET_URL;
+    (async () => {
+      const browser = await chromium.launch({ args: ["--no-sandbox", "--disable-dev-shm-usage"] });
+      for (let i = 1; ; i++) {
+        const ctx = await browser.newContext();          // new context = new RUM session
+        const page = await ctx.newPage();
+        try {
+          await page.goto(url, { waitUntil: 'networkidle', timeout: 60000 });
+          await page.waitForTimeout(5000);
+          await page.click('#submit').catch(() => {});   // user action -> RUM action
+          await page.waitForTimeout(20000);              // let RUM SDKs flush
+          console.log(`visit ${i} ok`);
+        } catch (e) { console.log(`visit ${i} failed: ${e.message}`); }
+        await ctx.close();
+        await new Promise(r => setTimeout(r, 15000));
+      }
+    })();
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rum-loadgen
+  namespace: app
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: rum-loadgen }
+  template:
+    metadata:
+      labels: { app: rum-loadgen }
+    spec:
+      containers:
+        - name: browser
+          image: mcr.microsoft.com/playwright:v1.47.2-jammy
+          workingDir: /work
+          command: ["sh", "-c", "npm init -y >/dev/null && npm i playwright@1.47.2 --no-audit --no-fund && node /scripts/visit.js"]
+          env:
+            - { name: TARGET_URL, value: "http://hyperswitch-frontend.app.svc.cluster.local/" }
+            - { name: PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD, value: "1" }
+          volumeMounts:
+            - { name: script, mountPath: /scripts }
+            - { name: work, mountPath: /work }
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { cpu: 1, memory: 1Gi }
+      volumes:
+        - name: script
+          configMap: { name: rum-loadgen-script }
+        - name: work
+          emptyDir: {}

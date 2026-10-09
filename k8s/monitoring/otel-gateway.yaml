@@ -1,0 +1,153 @@
+# Fan-out collector: app sends OTLP here once, it ships to BOTH vendors.
+#   -> Coralogix  (coralogix exporter, direct to Coralogix ingress)
+#   -> Datadog    (OTLP to the Datadog Agent on the same node, via the
+#                  "datadog" local Service created by the Datadog Helm chart)
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: otel-gateway
+  namespace: monitoring
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: otel-gateway
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "namespaces", "nodes"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["replicasets", "deployments"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: otel-gateway
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: otel-gateway
+subjects:
+  - kind: ServiceAccount
+    name: otel-gateway
+    namespace: monitoring
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-gateway-config
+  namespace: monitoring
+data:
+  config.yaml: |
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+          http:
+            endpoint: 0.0.0.0:4318
+
+    processors:
+      memory_limiter:
+        check_interval: 1s
+        limit_percentage: 80
+        spike_limit_percentage: 20
+      # adds k8s.pod.name, k8s.deployment.name, ... so traces link to pods/infra
+      k8sattributes:
+        passthrough: false
+        extract:
+          metadata: [k8s.namespace.name, k8s.pod.name, k8s.pod.uid, k8s.deployment.name, k8s.node.name]
+        pod_association:
+          - sources: [{ from: resource_attribute, name: k8s.pod.ip }]
+          - sources: [{ from: connection }]
+      resource:
+        attributes:
+          - key: k8s.cluster.name
+            value: ${env:CLUSTER_NAME}
+            action: upsert
+      batch:
+        timeout: 5s
+        send_batch_size: 512
+
+    exporters:
+      coralogix:
+        domain: ${env:CORALOGIX_DOMAIN}
+        private_key: ${env:CORALOGIX_PRIVATE_KEY}
+        application_name: hyperswitch-demo
+        subsystem_name: backend
+        # service.namespace -> Coralogix application, service.name -> subsystem
+        application_name_attributes: [service.namespace]
+        subsystem_name_attributes: [service.name]
+        timeout: 30s
+      otlphttp/datadog:
+        endpoint: http://datadog.monitoring.svc.cluster.local:4318
+        tls:
+          insecure: true
+
+    extensions:
+      health_check:
+        endpoint: 0.0.0.0:13133
+
+    service:
+      extensions: [health_check]
+      pipelines:
+        traces:
+          receivers: [otlp]
+          processors: [memory_limiter, k8sattributes, resource, batch]
+          exporters: [coralogix, otlphttp/datadog]
+        metrics:
+          receivers: [otlp]
+          processors: [memory_limiter, k8sattributes, resource, batch]
+          exporters: [coralogix, otlphttp/datadog]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: otel-gateway
+  namespace: monitoring
+  labels: { app: otel-gateway }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: otel-gateway }
+  template:
+    metadata:
+      labels: { app: otel-gateway }
+    spec:
+      serviceAccountName: otel-gateway
+      containers:
+        - name: collector
+          image: otel/opentelemetry-collector-contrib:0.160.0
+          args: ["--config=/conf/config.yaml"]
+          env:
+            - name: CORALOGIX_PRIVATE_KEY
+              valueFrom: { secretKeyRef: { name: coralogix-keys, key: PRIVATE_KEY } }
+            - name: CORALOGIX_DOMAIN
+              valueFrom: { configMapKeyRef: { name: cluster-info, key: CORALOGIX_DOMAIN } }
+            - name: CLUSTER_NAME
+              valueFrom: { configMapKeyRef: { name: cluster-info, key: CLUSTER_NAME } }
+          ports:
+            - { name: otlp-grpc, containerPort: 4317 }
+            - { name: otlp-http, containerPort: 4318 }
+          readinessProbe:
+            httpGet: { path: /, port: 13133 }
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits: { cpu: 500m, memory: 512Mi }
+          volumeMounts:
+            - { name: config, mountPath: /conf }
+      volumes:
+        - name: config
+          configMap: { name: otel-gateway-config }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: otel-gateway
+  namespace: monitoring
+spec:
+  selector: { app: otel-gateway }
+  ports:
+    - { name: otlp-grpc, port: 4317, targetPort: 4317 }
+    - { name: otlp-http, port: 4318, targetPort: 4318 }

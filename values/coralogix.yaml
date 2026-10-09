@@ -1,0 +1,17 @@
+# Coralogix otel-integration: node agent (DaemonSet) + cluster collector.
+# global.domain / global.clusterName are passed by bootstrap.sh with --set.
+# Needs secret "coralogix-keys" (key PRIVATE_KEY) in the same namespace.
+global:
+  defaultApplicationName: hyperswitch-demo
+  defaultSubsystemName: k8s-infra
+  deploymentEnvironmentName: kodekloud
+
+opentelemetry-agent:
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits: { cpu: 500m, memory: 768Mi }
+
+opentelemetry-cluster-collector:
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits: { cpu: 500m, memory: 768Mi }

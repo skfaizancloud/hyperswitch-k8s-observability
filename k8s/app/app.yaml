@@ -1,0 +1,115 @@
+# Rendered by bootstrap.sh with envsubst. ${VARS} come from your shell / .env
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hyperswitch-backend
+  namespace: app
+  labels:
+    app: hyperswitch-backend
+    tags.datadoghq.com/env: "${APP_ENV}"
+    tags.datadoghq.com/service: hyperswitch-backend
+    tags.datadoghq.com/version: "${IMAGE_TAG}"
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: hyperswitch-backend }
+  template:
+    metadata:
+      labels:
+        app: hyperswitch-backend
+        tags.datadoghq.com/env: "${APP_ENV}"
+        tags.datadoghq.com/service: hyperswitch-backend
+        tags.datadoghq.com/version: "${IMAGE_TAG}"
+    spec:
+      containers:
+        - name: backend
+          image: ${REGISTRY}/hyperswitch-backend:${IMAGE_TAG}
+          imagePullPolicy: Always
+          ports: [{ containerPort: 4242 }]
+          env:
+            - name: HYPERSWITCH_API_KEY
+              valueFrom: { secretKeyRef: { name: hyperswitch-keys, key: api-key } }
+            # ---- OpenTelemetry (APM) ----
+            - { name: OTEL_SERVICE_NAME, value: hyperswitch-backend }
+            - { name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "http://otel-gateway.monitoring.svc.cluster.local:4318" }
+            - { name: OTEL_EXPORTER_OTLP_PROTOCOL, value: http/protobuf }
+            - name: K8S_POD_IP
+              valueFrom: { fieldRef: { fieldPath: status.podIP } }
+            - name: OTEL_RESOURCE_ATTRIBUTES
+              value: "service.namespace=hyperswitch-demo,deployment.environment=${APP_ENV},service.version=${IMAGE_TAG},k8s.pod.ip=$(K8S_POD_IP)"
+          readinessProbe:
+            httpGet: { path: /healthz, port: 4242 }
+            initialDelaySeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: 4242 }
+            initialDelaySeconds: 15
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits: { cpu: 500m, memory: 384Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hyperswitch-backend
+  namespace: app
+spec:
+  selector: { app: hyperswitch-backend }
+  ports: [{ port: 4242, targetPort: 4242 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hyperswitch-frontend
+  namespace: app
+  labels:
+    app: hyperswitch-frontend
+    tags.datadoghq.com/env: "${APP_ENV}"
+    tags.datadoghq.com/service: hyperswitch-frontend
+    tags.datadoghq.com/version: "${IMAGE_TAG}"
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: hyperswitch-frontend }
+  template:
+    metadata:
+      labels:
+        app: hyperswitch-frontend
+        tags.datadoghq.com/env: "${APP_ENV}"
+        tags.datadoghq.com/service: hyperswitch-frontend
+        tags.datadoghq.com/version: "${IMAGE_TAG}"
+    spec:
+      containers:
+        - name: frontend
+          image: ${REGISTRY}/hyperswitch-frontend:${IMAGE_TAG}
+          imagePullPolicy: Always
+          ports: [{ containerPort: 80 }]
+          env:
+            # ---- runtime config -> /config.js (RUM) ----
+            - { name: APP_ENV, value: "${APP_ENV}" }
+            - { name: APP_VERSION, value: "${IMAGE_TAG}" }
+            - { name: BACKEND_URL, value: "http://hyperswitch-backend.app.svc.cluster.local:4242" }
+            - { name: HYPERSWITCH_PUBLISHABLE_KEY, value: "${HYPERSWITCH_PUBLISHABLE_KEY}" }
+            - { name: DD_RUM_ENABLED, value: "${DD_RUM_ENABLED}" }
+            - { name: DD_RUM_APP_ID, value: "${DD_RUM_APP_ID}" }
+            - { name: DD_RUM_CLIENT_TOKEN, value: "${DD_RUM_CLIENT_TOKEN}" }
+            - { name: DD_SITE, value: "${DD_SITE}" }
+            - { name: CX_RUM_ENABLED, value: "${CX_RUM_ENABLED}" }
+            - { name: CX_RUM_PUBLIC_KEY, value: "${CX_RUM_PUBLIC_KEY}" }
+            - { name: CX_RUM_DOMAIN, value: "${CX_RUM_DOMAIN}" }
+            - { name: RUM_TRACE_LINK, value: "${RUM_TRACE_LINK}" }
+          readinessProbe:
+            httpGet: { path: /nginx-health, port: 80 }
+          resources:
+            requests: { cpu: 25m, memory: 32Mi }
+            limits: { cpu: 200m, memory: 128Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hyperswitch-frontend
+  namespace: app
+spec:
+  type: NodePort
+  selector: { app: hyperswitch-frontend }
+  ports:
+    - { port: 80, targetPort: 80, nodePort: 30080 }
