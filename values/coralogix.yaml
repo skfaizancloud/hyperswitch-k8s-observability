@@ -6,12 +6,49 @@ global:
   defaultSubsystemName: k8s-infra
   deploymentEnvironmentName: dev
 
+# Playground fix: the nodes' "/" is not a shared mount, so the chart's default
+# mounts with mountPropagation: HostToContainer fail (CreateContainerError).
+# We mount the same host files WITHOUT propagation instead.
 opentelemetry-agent:
+  # Playground fix: on the controlplane, port 8888 is already used by a
+  # KodeKloud "kubectl" process. With hostNetwork the agent's self-metrics
+  # port 8888 clashes with it, so run the agent on the pod network instead
+  # (OTLP hostPorts 4317/4318 and kubelet scraping still work).
+  hostNetwork: false
+  dnsPolicy: ClusterFirst
+  presets:
+    hardenedMode:
+      enabled: true          # host metrics: mount /proc,/sys,/dev only (no "/" HostToContainer)
+    resourceDetection:
+      dbusMachineId:
+        enabled: false
+  extraVolumes:
+    - name: etcmachineid
+      hostPath:
+        path: /etc/machine-id
+        type: File
+  extraVolumeMounts:
+    - name: etcmachineid
+      mountPath: /etc/machine-id
+      readOnly: true
   resources:
     requests: { cpu: 50m, memory: 128Mi }
     limits: { cpu: 500m, memory: 768Mi }
 
 opentelemetry-cluster-collector:
+  presets:
+    resourceDetection:
+      dbusMachineId:
+        enabled: false
+  extraVolumes:
+    - name: etcmachineid
+      hostPath:
+        path: /etc/machine-id
+        type: File
+  extraVolumeMounts:
+    - name: etcmachineid
+      mountPath: /etc/machine-id
+      readOnly: true
   resources:
     requests: { cpu: 50m, memory: 128Mi }
     limits: { cpu: 500m, memory: 768Mi }
