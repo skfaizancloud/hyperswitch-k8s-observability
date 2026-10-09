@@ -48,6 +48,8 @@ spec:
           env:
             - { name: TARGET_URL, value: "http://hyperswitch-frontend.app.svc.cluster.local/" }
             - { name: PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD, value: "1" }
+            # script lives in /scripts but playwright is installed in /work
+            - { name: NODE_PATH, value: /work/node_modules }
           volumeMounts:
             - { name: script, mountPath: /scripts }
             - { name: work, mountPath: /work }
