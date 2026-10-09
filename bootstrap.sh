@@ -18,6 +18,9 @@ done
 : "${DD_RUM_ENABLED:=false}" "${DD_RUM_APP_ID:=}" "${DD_RUM_CLIENT_TOKEN:=}"
 : "${CX_RUM_ENABLED:=false}" "${CX_RUM_PUBLIC_KEY:=}" "${RUM_TRACE_LINK:=datadog}" "${ENABLE_LOADGEN:=false}"
 : "${CLUSTER_NAME:=kk-$(date +%m%d-%H%M)}"     # new name per session = no mixing with old data
+: "${APP_NAME:=faizan-apps-olly}"               # application name shown in Datadog + Coralogix
+# lowercase version for service names (Datadog lowercases service names anyway)
+APP_SLUG=$(printf '%s' "$APP_NAME" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9-' '-')
 if [ -z "${CX_RUM_DOMAIN:-}" ]; then
   case "$CORALOGIX_DOMAIN" in
     coralogix.com) CX_RUM_DOMAIN=EU1 ;;   eu2.coralogix.com) CX_RUM_DOMAIN=EU2 ;;
@@ -28,7 +31,8 @@ if [ -z "${CX_RUM_DOMAIN:-}" ]; then
   esac
 fi
 export IMAGE_TAG APP_ENV DD_SITE DD_RUM_ENABLED DD_RUM_APP_ID DD_RUM_CLIENT_TOKEN \
-       CX_RUM_ENABLED CX_RUM_PUBLIC_KEY CX_RUM_DOMAIN RUM_TRACE_LINK CLUSTER_NAME
+       CX_RUM_ENABLED CX_RUM_PUBLIC_KEY CX_RUM_DOMAIN RUM_TRACE_LINK CLUSTER_NAME APP_NAME APP_SLUG
+echo "app=$APP_NAME (services: $APP_SLUG-backend, $APP_SLUG-frontend)"
 echo "cluster=$CLUSTER_NAME  env=$APP_ENV  images=$REGISTRY/*:$IMAGE_TAG  cx=$CORALOGIX_DOMAIN($CX_RUM_DOMAIN)  dd=$DD_SITE"
 
 # ---------- 1. tools ----------
@@ -66,14 +70,16 @@ log "Installing Datadog"
 helm upgrade --install datadog datadog/datadog -n monitoring \
   ${DD_CHART_VERSION:+--version "$DD_CHART_VERSION"} \
   -f values/datadog.yaml \
-  --set datadog.site="$DD_SITE" --set datadog.clusterName="$CLUSTER_NAME"
+  --set datadog.site="$DD_SITE" --set datadog.clusterName="$CLUSTER_NAME" \
+  --set "datadog.tags[0]=project:$APP_SLUG"
 
 # ---------- 5. Coralogix: node agent + cluster collector ----------
 log "Installing Coralogix otel-integration"
 helm upgrade --install otel-coralogix-integration coralogix-charts-virtual/otel-integration -n monitoring \
   ${CX_CHART_VERSION:+--version "$CX_CHART_VERSION"} \
   --render-subchart-notes -f values/coralogix.yaml \
-  --set global.domain="$CORALOGIX_DOMAIN" --set global.clusterName="$CLUSTER_NAME"
+  --set global.domain="$CORALOGIX_DOMAIN" --set global.clusterName="$CLUSTER_NAME" \
+  --set global.defaultApplicationName="$APP_NAME"
 
 # ---------- 6. fan-out collector (app APM -> both vendors) ----------
 log "Deploying otel-gateway"
@@ -82,7 +88,7 @@ kubectl -n monitoring rollout restart deploy/otel-gateway >/dev/null   # pick up
 
 # ---------- 7. application ----------
 log "Deploying Hyperswitch app"
-VARS='${REGISTRY} ${IMAGE_TAG} ${APP_ENV} ${HYPERSWITCH_PUBLISHABLE_KEY} ${DD_RUM_ENABLED} ${DD_RUM_APP_ID} ${DD_RUM_CLIENT_TOKEN} ${DD_SITE} ${CX_RUM_ENABLED} ${CX_RUM_PUBLIC_KEY} ${CX_RUM_DOMAIN} ${RUM_TRACE_LINK}'
+VARS='${REGISTRY} ${IMAGE_TAG} ${APP_ENV} ${APP_NAME} ${APP_SLUG} ${HYPERSWITCH_PUBLISHABLE_KEY} ${DD_RUM_ENABLED} ${DD_RUM_APP_ID} ${DD_RUM_CLIENT_TOKEN} ${DD_SITE} ${CX_RUM_ENABLED} ${CX_RUM_PUBLIC_KEY} ${CX_RUM_DOMAIN} ${RUM_TRACE_LINK}'
 export REGISTRY HYPERSWITCH_PUBLISHABLE_KEY
 envsubst "$VARS" < k8s/app/app.yaml | kubectl apply -f -
 kubectl -n app rollout restart deploy/hyperswitch-backend deploy/hyperswitch-frontend >/dev/null
