@@ -4,6 +4,7 @@ set -e
 cat > /usr/share/nginx/html/config.js <<CFG
 window.__APP_CONFIG__ = {
   env: "${APP_ENV:-dev}",
+  appName: "${APP_NAME:-hyperswitch}",
   version: "${APP_VERSION:-0.0.0}",
   frontendService: "${FRONTEND_SERVICE:-hyperswitch-frontend}",
   hyperswitchPublishableKey: "${HYPERSWITCH_PUBLISHABLE_KEY:-}",
