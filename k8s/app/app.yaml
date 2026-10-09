@@ -7,7 +7,7 @@ metadata:
   labels:
     app: hyperswitch-backend
     tags.datadoghq.com/env: "${APP_ENV}"
-    tags.datadoghq.com/service: hyperswitch-backend
+    tags.datadoghq.com/service: "${APP_SLUG}-backend"
     tags.datadoghq.com/version: "${IMAGE_TAG}"
 spec:
   replicas: 1
@@ -18,7 +18,7 @@ spec:
       labels:
         app: hyperswitch-backend
         tags.datadoghq.com/env: "${APP_ENV}"
-        tags.datadoghq.com/service: hyperswitch-backend
+        tags.datadoghq.com/service: "${APP_SLUG}-backend"
         tags.datadoghq.com/version: "${IMAGE_TAG}"
     spec:
       containers:
@@ -30,13 +30,13 @@ spec:
             - name: HYPERSWITCH_API_KEY
               valueFrom: { secretKeyRef: { name: hyperswitch-keys, key: api-key } }
             # ---- OpenTelemetry (APM) ----
-            - { name: OTEL_SERVICE_NAME, value: hyperswitch-backend }
+            - { name: OTEL_SERVICE_NAME, value: "${APP_SLUG}-backend" }
             - { name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "http://otel-gateway.monitoring.svc.cluster.local:4318" }
             - { name: OTEL_EXPORTER_OTLP_PROTOCOL, value: http/protobuf }
             - name: K8S_POD_IP
               valueFrom: { fieldRef: { fieldPath: status.podIP } }
             - name: OTEL_RESOURCE_ATTRIBUTES
-              value: "service.namespace=hyperswitch-demo,deployment.environment=${APP_ENV},service.version=${IMAGE_TAG},k8s.pod.ip=$(K8S_POD_IP)"
+              value: "service.namespace=${APP_NAME},deployment.environment=${APP_ENV},service.version=${IMAGE_TAG},k8s.pod.ip=$(K8S_POD_IP)"
           readinessProbe:
             httpGet: { path: /healthz, port: 4242 }
             initialDelaySeconds: 5
@@ -64,7 +64,7 @@ metadata:
   labels:
     app: hyperswitch-frontend
     tags.datadoghq.com/env: "${APP_ENV}"
-    tags.datadoghq.com/service: hyperswitch-frontend
+    tags.datadoghq.com/service: "${APP_SLUG}-frontend"
     tags.datadoghq.com/version: "${IMAGE_TAG}"
 spec:
   replicas: 1
@@ -75,7 +75,7 @@ spec:
       labels:
         app: hyperswitch-frontend
         tags.datadoghq.com/env: "${APP_ENV}"
-        tags.datadoghq.com/service: hyperswitch-frontend
+        tags.datadoghq.com/service: "${APP_SLUG}-frontend"
         tags.datadoghq.com/version: "${IMAGE_TAG}"
     spec:
       containers:
@@ -86,6 +86,8 @@ spec:
           env:
             # ---- runtime config -> /config.js (RUM) ----
             - { name: APP_ENV, value: "${APP_ENV}" }
+            - { name: APP_NAME, value: "${APP_NAME}" }
+            - { name: FRONTEND_SERVICE, value: "${APP_SLUG}-frontend" }
             - { name: APP_VERSION, value: "${IMAGE_TAG}" }
             - { name: BACKEND_URL, value: "http://hyperswitch-backend.app.svc.cluster.local:4242" }
             - { name: HYPERSWITCH_PUBLISHABLE_KEY, value: "${HYPERSWITCH_PUBLISHABLE_KEY}" }
